@@ -74,11 +74,12 @@ export function checkTransition(
 ): TransitionCheck {
   const role = user.roles.get(item.team_id);
   if (!roleAtLeast(role, rule.minRole)) return 'forbidden_role';
+  // Check "unassigned" before "not the assignee" so the user is told to claim first.
+  if (rule.requiresAssignee && !item.assignee_id) return 'assignee_required';
   const isLeadPlus = roleAtLeast(role, 'lead');
   if (rule.memberMustBeAssignee && !isLeadPlus && item.assignee_id !== user.id) {
     return 'forbidden_not_assignee';
   }
-  if (rule.requiresAssignee && !item.assignee_id) return 'assignee_required';
   return 'ok';
 }
 
