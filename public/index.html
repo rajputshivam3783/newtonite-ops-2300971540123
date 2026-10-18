@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations Under Pressure</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1d2330; --muted:#6a7385; --accent:#2457d6; --danger:#c0392b; --ok:#1f8a4c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  button, input, select, textarea { font:inherit; }
+  button { cursor:pointer; border:1px solid var(--line); background:var(--card); padding:6px 12px; border-radius:6px; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.danger { color:var(--danger); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  input, select, textarea { border:1px solid var(--line); border-radius:6px; padding:6px 8px; background:#fff; width:100%; }
+  textarea { min-height:70px; resize:vertical; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 18px; background:#101828; color:#fff; }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  header button { background:transparent; color:#fff; border-color:#475467; }
+  .wrap { max-width:1400px; margin:0 auto; padding:16px; }
+  .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .tab { padding:8px 14px; border-radius:20px; border:1px solid var(--line); background:var(--card); }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .tab .n { margin-left:6px; font-weight:600; }
+  .filters { display:grid; grid-template-columns: 2fr repeat(4, 1fr); gap:8px; margin-bottom:12px; }
+  .layout { display:grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); gap:16px; align-items:start; }
+  @media (max-width: 1000px){ .layout{grid-template-columns:1fr;} .filters{grid-template-columns:1fr 1fr;} }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  tr.row { cursor:pointer; } tr.row:hover { background:#f8faff; } tr.sel { background:#eef3ff; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:#eceff4; }
+  .p-urgent { background:#fde4e1; color:#a5281b; } .p-high { background:#fdeccf; color:#8a5200; }
+  .s-awaiting_approval { background:#fff3c4; } .s-resolved { background:#d9f2e3; } .s-closed { background:#e5e7eb; color:#555; }
+  .s-in_progress { background:#dbe7ff; }
+  .muted { color:var(--muted); } .small { font-size:12px; }
+  .pad { padding:14px; } .row-flex { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .banner { padding:10px 12px; border-radius:8px; margin-bottom:10px; background:#fdeceb; color:var(--danger); border:1px solid #f4c2be; }
+  .banner.info { background:#eaf1ff; color:#1b3d91; border-color:#c5d5f7; }
+  .field { margin-bottom:8px; } .field label { display:block; font-size:12px; color:var(--muted); margin-bottom:2px; }
+  .timeline { list-style:none; margin:0; padding:0; } .timeline li { padding:8px 0; border-bottom:1px solid var(--line); }
+  .quote { margin-top:4px; padding:6px 10px; background:#f5f6f8; border-left:3px solid var(--line); white-space:pre-wrap; }
+  .modal-bg { position:fixed; inset:0; background:rgba(16,24,40,.5); display:flex; align-items:center; justify-content:center; padding:16px; z-index:10; }
+  .modal { width:min(560px,100%); max-height:92vh; overflow:auto; }
+  .notes { position:absolute; right:18px; top:48px; width:340px; max-height:60vh; overflow:auto; z-index:5; color:var(--text); }
+  .login { max-width:380px; margin:8vh auto; } .login h1 { margin-top:0; }
+  .demo button { display:block; width:100%; text-align:left; margin-top:6px; }
+  h2, h3 { margin:0 0 8px; } .gap { margin-top:14px; }
+  .title-big { font-size:18px; font-weight:600; margin-bottom:6px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ---------- tiny helpers (everything is built with DOM nodes / textContent => no XSS via innerHTML) ---------- */
+const h = (tag, props = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k === 'value') e.value = v ?? '';
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) { if (kid == null || kid === false) continue; e.append(kid.nodeType ? kid : document.createTextNode(String(kid))); }
+  return e;
+};
+const label = (s) => String(s || '').replace(/_/g, ' ');
+const when = (s) => (s ? new Date(s).toLocaleString() : '');
+const badge = (cls, text) => h('span', { class: 'badge ' + cls }, label(text));
+const STATUSES = ['open', 'in_progress', 'awaiting_approval', 'resolved', 'closed'];
+const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
+const TYPES = ['incident', 'customer_issue', 'payment', 'compliance', 'task'];
+
+const S = {
+  token: localStorage.getItem('token'), me: null,
+  view: 'all', filters: { q: '', status: '', priority: '', type: '', team_id: '' },
+  items: [], cursor: null, counts: null, notes: [], showNotes: false,
+  detail: null, create: null, listError: null,
+};
+
+async function api(path, { method = 'GET', body, headers = {} } = {}) {
+  const res = await fetch('/api' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(S.token ? { Authorization: 'Bearer ' + S.token } : {}), ...headers },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401 && path !== '/auth/login') logout();
+    const err = new Error(data.error?.message || 'Request failed (' + res.status + ')');
+    err.status = res.status; err.code = data.error?.code; err.latest = data.error?.latest;
+    throw err;
+  }
+  return data;
+}
+const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+
+/* ---------- login ---------- */
+const DEMO = [
+  ['admin@ops.test', 'Admin (all teams)'], ['priya@ops.test', 'Lead - Payments Ops'], ['rahul@ops.test', 'Lead - Support & Compliance'],
+  ['amit@ops.test', 'Member - Payments & Support'], ['sara@ops.test', 'Member - Support'],
+  ['vik@ops.test', 'Viewer - Payments & Support'], ['maya@ops.test', 'Viewer - Compliance'],
+];
+function showLogin(msg) {
+  const email = h('input', { type: 'email', value: 'amit@ops.test', autocomplete: 'username' });
+  const pass = h('input', { type: 'password', value: 'password123', autocomplete: 'current-password' });
+  const err = h('div', { class: 'banner', style: msg ? '' : 'display:none' }, msg || '');
+  const submit = async (ev) => {
+    ev.preventDefault();
+    try {
+      const r = await api('/auth/login', { method: 'POST', body: { email: email.value, password: pass.value } });
+      S.token = r.token; localStorage.setItem('token', r.token); boot();
+    } catch (e) { err.style.display = ''; err.textContent = e.message; }
+  };
+  $app(h('div', { class: 'card pad login' },
+    h('h1', {}, 'Operations Under Pressure'), err,
+    h('form', { onsubmit: submit },
+      h('div', { class: 'field' }, h('label', {}, 'Email'), email),
+      h('div', { class: 'field' }, h('label', {}, 'Password'), pass),
+      h('button', { class: 'primary', type: 'submit' }, 'Sign in')),
+    h('div', { class: 'demo gap' }, h('div', { class: 'muted small' }, 'Demo accounts (password: password123)'),
+      DEMO.map(([e, d]) => h('button', { type: 'button', onclick: () => { email.value = e; pass.value = 'password123'; } }, e + '  -  ' + d)))));
+}
+function logout() { localStorage.removeItem('token'); S.token = null; S.me = null; S.detail = null; showLogin(); }
+const $app = (...kids) => { const a = document.getElementById('app'); a.replaceChildren(...kids); };
+
+/* ---------- shell ---------- */
+async function boot() {
+  if (!S.token) return showLogin();
+  try { S.me = await api('/me'); } catch { return showLogin(); }
+  S.view = 'all'; S.detail = null;
+  const canCreate = S.me.teams.some((t) => t.role !== 'viewer');
+  const search = h('input', { placeholder: 'Search title / description...', value: S.filters.q });
+  let timer; search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { S.filters.q = search.value; loadItems(true); }, 300); });
+  const sel = (key, opts) => { const s = h('select', { onchange: () => { S.filters[key] = s.value; loadItems(true); } },
+    h('option', { value: '' }, 'All ' + key.replace('_id', '') + 's'), opts.map(([v, t]) => h('option', { value: v }, t))); return s; };
+
+  $app(
+    h('header', {}, h('h1', {}, 'Operations Under Pressure'),
+      h('span', { class: 'small' }, S.me.name + ' (' + S.me.teams.map((t) => t.name + ': ' + t.role).join(', ') + ')'),
+      h('button', { id: 'bell', onclick: () => { S.showNotes = !S.showNotes; renderNotes(); } }, 'Notifications'),
+      h('button', { onclick: refreshAll }, 'Refresh'),
+      h('button', { onclick: logout }, 'Sign out')),
+    h('div', { id: 'notes' }),
+    h('div', { class: 'wrap' },
+      h('div', { class: 'row-flex', style: 'margin-bottom:12px' },
+        h('div', { class: 'tabs', id: 'tabs', style: 'margin:0;flex:1' }),
+        h('button', { class: 'primary', disabled: !canCreate, title: canCreate ? '' : 'Viewers cannot create items', onclick: openCreate }, '+ New item')),
+      h('div', { class: 'filters' }, search,
+        sel('status', STATUSES.map((s) => [s, label(s)])), sel('priority', PRIORITIES.map((s) => [s, s])),
+        sel('type', TYPES.map((s) => [s, label(s)])), sel('team_id', S.me.teams.map((t) => [t.id, t.name]))),
+      h('div', { class: 'layout' }, h('div', { id: 'list' }), h('div', { id: 'detail' }))),
+    h('div', { id: 'modal' }));
+  renderTabs();                                   // tabs show immediately; counts fill in when they arrive
+  await Promise.all([loadCounts(), loadItems(true), loadNotes()]);
+  clearInterval(S.poll); S.poll = setInterval(() => { loadCounts(); loadNotes(); }, 15000); // polling is enough (no websockets)
+}
+const refreshAll = () => { loadCounts(); loadItems(true); loadNotes(); if (S.detail) openItem(S.detail.item.id, true); };
+
+/* ---------- counts / tabs ---------- */
+async function loadCounts() { try { S.counts = await api('/dashboard'); renderTabs(); } catch {} }
+function renderTabs() {
+  const t = document.getElementById('tabs'); if (!t) return;
+  const defs = [['all', 'All items', null], ['assigned_to_me', 'Assigned to me', 'assigned_to_me'],
+    ['unassigned_urgent', 'Unassigned urgent', 'unassigned_urgent'], ['awaiting_my_approval', 'Awaiting my approval', 'awaiting_my_approval']];
+  t.replaceChildren(...defs.map(([v, text, k]) => h('button', { class: 'tab' + (S.view === v ? ' active' : ''), onclick: () => { S.view = v; renderTabs(); loadItems(true); } },
+    text, k && S.counts ? h('span', { class: 'n' }, S.counts[k]) : null)));
+}
+
+/* ---------- list (server-side filter + cursor pagination) ---------- */
+async function loadItems(reset) {
+  const p = new URLSearchParams({ limit: '25' });
+  if (S.view !== 'all') p.set('view', S.view);
+  for (const [k, v] of Object.entries(S.filters)) if (v) p.set(k, v);
+  if (!reset && S.cursor) p.set('cursor', S.cursor);
+  try {
+    const r = await api('/items?' + p);
+    S.items = reset ? r.items : S.items.concat(r.items); S.cursor = r.next_cursor; S.listError = null;
+  } catch (e) { S.listError = e.message; }
+  renderList();
+}
+function renderList() {
+  const box = document.getElementById('list'); if (!box) return;
+  const selId = S.detail?.item.id;
+  const rows = S.items.map((i) => h('tr', { class: 'row' + (i.id === selId ? ' sel' : ''), onclick: () => openItem(i.id) },
+    h('td', {}, h('div', {}, i.title), h('div', { class: 'muted small' }, i.team_name + ' · ' + label(i.type))),
+    h('td', {}, badge('p-' + i.priority, i.priority)), h('td', {}, badge('s-' + i.status, i.status)),
+    h('td', {}, i.assignee_name || h('span', { class: 'muted' }, 'unassigned')),
+    h('td', { class: 'small' }, i.due_date || '')));
+  box.replaceChildren(h('div', { class: 'card' },
+    S.listError ? h('div', { class: 'banner' }, S.listError) : null,
+    h('table', {}, h('thead', {}, h('tr', {}, ['Item', 'Priority', 'Status', 'Assignee', 'Due'].map((x) => h('th', {}, x)))), h('tbody', {}, rows)),
+    S.items.length === 0 && !S.listError ? h('div', { class: 'pad muted' }, 'Nothing here.') : null,
+    S.cursor ? h('div', { class: 'pad' }, h('button', { onclick: () => loadItems(false) }, 'Load more')) : h('div', { class: 'pad muted small' }, S.items.length + ' item(s)')));
+}
+
+/* ---------- notifications ---------- */
+async function loadNotes() { try { S.notes = (await api('/notifications')).notifications; renderNotes(); } catch {} }
+function renderNotes() {
+  const b = document.getElementById('bell'); if (b) b.textContent = 'Notifications (' + S.notes.length + ')';
+  const box = document.getElementById('notes'); if (!box) return;
+  box.replaceChildren(S.showNotes ? h('div', { class: 'card pad notes' },
+    S.notes.length ? S.notes.map((n) => h('div', { style: 'padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer', onclick: () => { S.showNotes = false; renderNotes(); openItem(n.item_id); } },
+      h('div', {}, n.message), h('div', { class: 'muted small' }, when(n.created_at)))) : h('div', { class: 'muted' }, 'No notifications yet.')) : '');
+}
+
+/* ---------- item detail ---------- */
+async function openItem(id, keepBanner) {
+  const prev = S.detail;
+  try {
+    const [item, act] = await Promise.all([api('/items/' + id), api('/items/' + id + '/activity?limit=100')]);
+    S.detail = { item, events: act.events, banner: keepBanner && prev ? prev.banner : null, busy: false, draft: null };
+  } catch (e) {
+    S.detail = null; document.getElementById('detail').replaceChildren(h('div', { class: 'banner' }, e.message)); return;
+  }
+  renderDetail(); renderList();
+}
+
+function renderDetail() {
+  const box = document.getElementById('detail'); if (!box) return;
+  const d = S.detail; if (!d) return box.replaceChildren();
+  const it = d.item, a = it.allowed;
+  d.draft = d.draft || { title: it.title, description: it.description, type: it.type, priority: it.priority, due_date: it.due_date || '' };
+  const dr = d.draft;
+  const inp = (key, el) => { el.addEventListener('input', () => { dr[key] = el.value; }); return el; };
+  const dis = d.busy;
+
+  const banner = d.banner ? h('div', { class: 'banner ' + (d.banner.kind === 'info' ? 'info' : '') }, d.banner.text,
+    d.banner.extra === 'reload' ? h('div', { style: 'margin-top:6px' }, h('button', { onclick: () => openItem(it.id) }, 'Reload latest version')) : null) : null;
+
+  const commentBox = h('textarea', { placeholder: 'Add a comment...' });
+  box.replaceChildren(h('div', { class: 'card pad' }, banner,
+    h('div', { class: 'title-big' }, it.title),
+    h('div', { class: 'row-flex' }, badge('s-' + it.status, it.status), badge('p-' + it.priority, it.priority), badge('', it.type),
+      h('span', { class: 'muted small' }, it.team_name + ' · v' + it.version)),
+    h('p', { style: 'white-space:pre-wrap' }, it.description || h('span', { class: 'muted' }, 'No description')),
+    h('div', { class: 'small muted' }, 'Created by ' + it.created_by_name + ' on ' + when(it.created_at) + (it.due_date ? ' · due ' + it.due_date : '')),
+    h('div', { class: 'gap' }, h('b', {}, 'Assignee: '), it.assignee_name || h('span', { class: 'muted' }, 'nobody yet')),
+
+    h('div', { class: 'row-flex gap' },
+      a.claim ? h('button', { class: 'primary', disabled: dis, onclick: doClaim }, 'Claim') : null,
+      a.transitions.map((t) => h('button', { disabled: dis, onclick: () => doTransition(t.to) }, t.label)),
+      !a.claim && !a.transitions.length ? h('span', { class: 'muted small' }, a.role === 'viewer' ? 'Read-only (viewer)' : 'No actions available for you on this item') : null),
+
+    a.edit ? h('details', { class: 'gap' }, h('summary', {}, 'Edit'),
+      h('div', { style: 'margin-top:8px' },
+        h('div', { class: 'field' }, h('label', {}, 'Title'), inp('title', h('input', { value: dr.title }))),
+        h('div', { class: 'field' }, h('label', {}, 'Description'), inp('description', h('textarea', { value: dr.description }))),
+        h('div', { class: 'row-flex' },
+          h('div', { class: 'field', style: 'flex:1' }, h('label', {}, 'Type'), inp('type', h('select', { value: dr.type, onchange: (e) => { dr.type = e.target.value; } }, TYPES.map((t) => h('option', { value: t, selected: t === dr.type }, label(t)))))),
+          h('div', { class: 'field', style: 'flex:1' }, h('label', {}, 'Priority'), h('select', { onchange: (e) => { dr.priority = e.target.value; } }, PRIORITIES.map((t) => h('option', { value: t, selected: t === dr.priority }, t)))),
+          h('div', { class: 'field', style: 'flex:1' }, h('label', {}, 'Due date'), inp('due_date', h('input', { type: 'date', value: dr.due_date })))),
+        h('button', { class: 'primary', disabled: dis, onclick: doSave }, 'Save changes'))) : null,
+
+    a.comment ? h('div', { class: 'gap' }, commentBox, h('div', { style: 'margin-top:6px' },
+      h('button', { disabled: dis, onclick: () => doComment(commentBox.value) }, 'Post comment'))) : null,
+
+    h('h3', { class: 'gap' }, 'Activity'),
+    h('ul', { class: 'timeline' }, d.events.map((e) => h('li', {},
+      h('b', {}, e.actor_name), ' ', describe(e), h('div', { class: 'muted small' }, when(e.created_at)),
+      e.comment_body ? h('div', { class: 'quote' }, e.comment_body) : null)))));
+}
+function describe(e) {
+  const d = e.data || {};
+  switch (e.type) {
+    case 'created': return 'created this item';
+    case 'claimed': return 'claimed it';
+    case 'status_changed': return 'moved it from ' + label(d.from) + ' to ' + label(d.to);
+    case 'priority_changed': return 'changed priority from ' + d.from + ' to ' + d.to;
+    case 'item_updated': return 'edited ' + Object.keys(d.changes || {}).join(', ');
+    case 'comment_added': return 'commented';
+    default: return e.type;
+  }
+}
+
+/* Runs an action with an optimistic UI update. On ANY server rejection the UI rolls back
+   to the previous state and shows the server's reason. */
+async function act({ optimistic, request, failPrefix }) {
+  const d = S.detail, before = d.item;
+  const shown = () => S.detail === d;           // the user may have opened another item meanwhile
+  d.busy = true; d.banner = null;
+  if (optimistic) d.item = optimistic(before);
+  renderDetail();
+  try {
+    await request(before);
+  } catch (e) {
+    d.item = before; d.busy = false;             // ROLLBACK the optimistic change
+    const banner = (text, extra) => { d.banner = { kind: 'error', text, extra }; };
+    if (e.status === 409) {
+      banner(e.code === 'already_claimed'
+        ? 'Too slow - ' + (e.latest?.assignee_name || 'someone else') + ' already claimed this item.'
+        : 'This item changed since you opened it. Reload to see the latest version.', 'reload');
+    } else if (e.status === 403 || e.status === 404) banner('Not allowed: ' + e.message);
+    else banner((failPrefix || 'Failed') + ': ' + e.message);
+    if (shown()) renderDetail();
+    // someone else won the race: show the item as it really is now (keep the banner explaining why)
+    if (e.code === 'already_claimed' && shown()) await openItem(before.id, true);
+    return;
+  }
+  // The request succeeded: reconcile with the server's truth. (A failed reload must never undo a successful action.)
+  if (shown()) await openItem(before.id);
+  loadCounts(); loadItems(true);
+}
+const doClaim = () => act({
+  optimistic: (it) => ({ ...it, assignee_id: S.me.id, assignee_name: S.me.name, allowed: { ...it.allowed, claim: false } }),
+  request: (it) => api('/items/' + it.id + '/claim', { method: 'POST', headers: { 'Idempotency-Key': newKey() } }),
+  failPrefix: 'Claim failed',
+});
+const doTransition = (to) => act({
+  optimistic: (it) => ({ ...it, status: to, allowed: { ...it.allowed, transitions: [], claim: false } }),
+  request: (it) => api('/items/' + it.id + '/transition', { method: 'POST', headers: { 'Idempotency-Key': newKey() }, body: { to, version: it.version } }),
+  failPrefix: 'Transition failed',
+});
+const doSave = () => {
+  const d = S.detail, it = d.item, dr = d.draft;
+  const body = { version: it.version, title: dr.title, description: dr.description, type: dr.type, priority: dr.priority, due_date: dr.due_date || null };
+  return act({
+    optimistic: (x) => ({ ...x, title: dr.title, description: dr.description, type: dr.type, priority: dr.priority, due_date: dr.due_date || null }),
+    request: () => api('/items/' + it.id, { method: 'PATCH', body }),
+    failPrefix: 'Save failed',
+  });
+};
+const doComment = (text) => {
+  if (!text.trim()) return;
+  return act({ request: (it) => api('/items/' + it.id + '/comments', { method: 'POST', headers: { 'Idempotency-Key': newKey() }, body: { body: text } }), failPrefix: 'Comment failed' });
+};
+
+/* ---------- create ---------- */
+function openCreate() {
+  const teams = S.me.teams.filter((t) => t.role !== 'viewer');
+  const key = newKey();                         // one key per open form => retries / double-submits can't create duplicates
+  const f = { team_id: teams[0].id, title: '', description: '', type: 'task', priority: 'medium', due_date: '' };
+  const err = h('div', { class: 'banner', style: 'display:none' });
+  const submit = h('button', { class: 'primary' }, 'Create');
+  submit.onclick = async () => {
+    submit.disabled = true; err.style.display = 'none';
+    try {
+      const body = { team_id: f.team_id, title: f.title, description: f.description, type: f.type, priority: f.priority };
+      if (f.due_date) body.due_date = f.due_date;
+      const item = await api('/items', { method: 'POST', headers: { 'Idempotency-Key': key }, body });
+      document.getElementById('modal').replaceChildren(); loadCounts(); await loadItems(true); openItem(item.id);
+    } catch (e) { err.style.display = ''; err.textContent = e.message; submit.disabled = false; }
+  };
+  const on = (k) => (e) => { f[k] = e.target.value; };
+  const opt = (arr, cur, fmt = (x) => x) => arr.map((x) => h('option', { value: x, selected: x === cur }, fmt(x)));
+  document.getElementById('modal').replaceChildren(h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.className === 'modal-bg') e.target.remove(); } },
+    h('div', { class: 'card pad modal' }, h('h2', {}, 'New work item'), err,
+      h('div', { class: 'field' }, h('label', {}, 'Team'), h('select', { onchange: on('team_id') }, teams.map((t) => h('option', { value: t.id }, t.name)))),
+      h('div', { class: 'field' }, h('label', {}, 'Title'), h('input', { oninput: on('title'), maxlength: 200 })),
+      h('div', { class: 'field' }, h('label', {}, 'Description'), h('textarea', { oninput: on('description') })),
+      h('div', { class: 'row-flex' },
+        h('div', { class: 'field', style: 'flex:1' }, h('label', {}, 'Type'), h('select', { onchange: on('type') }, opt(TYPES, 'task', label))),
+        h('div', { class: 'field', style: 'flex:1' }, h('label', {}, 'Priority'), h('select', { onchange: on('priority') }, opt(PRIORITIES, 'medium'))),
+        h('div', { class: 'field', style: 'flex:1' }, h('label', {}, 'Due'), h('input', { type: 'date', oninput: on('due_date') }))),
+      h('div', { class: 'row-flex' }, submit, h('button', { onclick: () => document.getElementById('modal').replaceChildren() }, 'Cancel')))));
+}
+
+boot();
+</script>
+</body>
+</html>
