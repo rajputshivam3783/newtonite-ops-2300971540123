@@ -1,4 +1,4 @@
-# Operations Under Pressure
+﻿# Operations Under Pressure
 
 An internal web app to **create, assign, track and resolve operational work items across teams**
 (Newtonite Software Engineering Challenge). Built as one tight vertical slice, with the effort spent on
@@ -47,13 +47,13 @@ edit an item in one tab after changing it in another; try to approve an item as 
 Tests run against a real PostgreSQL (the concurrency behaviour is the point, so no mocks).
 
 ```bash
-docker compose up -d db     # or any Postgres on localhost:5432 (user/password: postgres)
+docker compose up -d db     # or any Postgres on localhost:5433 (user/password: postgres)
 npm ci
 npm test                    # creates the opsdb_test database and applies migrations automatically
 npm run typecheck           # optional
 ```
 
-Use another database with `TEST_DATABASE_URL=postgres://user:pass@host:5432/dbname npm test`.
+Use another database with `TEST_DATABASE_URL=postgres://user:pass@host:5433/dbname npm test`.
 
 | Test file | What it proves |
 |---|---|
@@ -129,7 +129,7 @@ members with too low a role get **403**.
 | `GET /api/notifications` | produced by the worker |
 
 Errors: `{ "error": { "code", "message", ... } }`; `409` responses include `error.latest` (the current item).
-`401` unauthenticated · `403` forbidden · `404` not found/not visible · `409` conflict · `422` rule violation · `400` validation.
+`401` unauthenticated Â· `403` forbidden Â· `404` not found/not visible Â· `409` conflict Â· `422` rule violation Â· `400` validation.
 
 ## Project layout
 
@@ -165,3 +165,4 @@ ENGINEERING_DECISIONS.md  design decisions and trade-offs
 3. Real delivery in the worker (email/Slack) with a dead-letter view and a retry button for `failed` jobs.
 4. TTL cleanup for idempotency keys; partition `activity_events` by month; read replica for list/search.
 5. CI (GitHub Actions: Postgres service + `npm test`), and a Playwright browser test on top of the jsdom UI tests.
+
