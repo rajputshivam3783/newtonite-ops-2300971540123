@@ -1,0 +1,46 @@
+# One command: docker compose up --build   ->   http://localhost:3000
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: opsdb
+    ports:
+      - "5432:5432"            # exposed so `npm test` can run on the host
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d opsdb"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:                          # serves the REST API and the web UI
+    build: .
+    environment: &app-env
+      DATABASE_URL: postgres://postgres:postgres@db:5432/opsdb
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    # migrate -> seed demo data (only if the DB is empty) -> start
+    command: sh -c "npm run migrate && npm run seed && npm start"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  worker:                       # processes the transactional outbox (notifications)
+    build: .
+    environment: *app-env
+    depends_on:
+      api:
+        condition: service_healthy
+    command: npm run worker
+
+volumes:
+  pgdata:
